@@ -27,9 +27,12 @@ import android.content.res.Configuration;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Handler;
 import android.view.Display;
 import android.view.Gravity;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
 import android.view.WindowManager;
@@ -40,6 +43,28 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
+
+import com.google.android.exoplayer2.ExoPlaybackException;
+import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.ExoPlayerFactory;
+import com.google.android.exoplayer2.PlaybackParameters;
+import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.SimpleExoPlayer;
+import com.google.android.exoplayer2.Timeline;
+import com.google.android.exoplayer2.source.ExtractorMediaSource;
+import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.TrackGroupArray;
+import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection;
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
+import com.google.android.exoplayer2.trackselection.TrackSelection;
+import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
+import com.google.android.exoplayer2.trackselection.TrackSelector;
+import com.google.android.exoplayer2.ui.PlayerView;
+import com.google.android.exoplayer2.upstream.BandwidthMeter;
+import com.google.android.exoplayer2.upstream.DataSource;
+import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
+import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
+import com.google.android.exoplayer2.util.Util;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -59,10 +84,18 @@ public class SplashScreen extends CordovaPlugin {
     private static boolean firstShow = true;
     private static boolean lastHideAfterDelay; // https://issues.apache.org/jira/browse/CB-9094
 
+    private Boolean VideoHideOnFinished = false;
+    private String VideoPath;
+    private Boolean AllowVideo = false;
+    private Boolean VideoFinished = false;
+
     /**
      * Displays the splash drawable.
      */
     private ImageView splashImageView;
+
+    private SimpleExoPlayer exoPlayer;
+    private SurfaceView exoSurfaceView;
 
     /**
      * Remember last device orientation to detect orientation changes.
@@ -95,6 +128,11 @@ public class SplashScreen extends CordovaPlugin {
         if (HAS_BUILT_IN_SPLASH_SCREEN) {
             return;
         }
+        VideoPath = preferences.getString("SplashScreenVideoPath", "");
+        if (VideoPath != "") {
+            AllowVideo = true;
+        }
+
         // Make WebView invisible while loading URL
         // CB-11326 Ensure we're calling this on UI thread
         cordova.getActivity().runOnUiThread(new Runnable() {
@@ -110,7 +148,11 @@ public class SplashScreen extends CordovaPlugin {
 
         if (firstShow) {
             boolean autoHide = preferences.getBoolean("AutoHideSplashScreen", true);
-            showSplashScreen(autoHide);
+            if (AllowVideo) {
+                showVideoSplashScreen(autoHide);
+            } else {
+                showSplashScreen(autoHide);
+            }
         }
 
         if (preferences.getBoolean("SplashShowOnlyFirstTime", true)) {
@@ -144,7 +186,11 @@ public class SplashScreen extends CordovaPlugin {
             return;
         }
         // hide the splash screen to avoid leaking a window
-        this.removeSplashScreen(true);
+        if (AllowVideo) {
+            this.removeVideoSplashScreen(true);
+        } else {
+            this.removeSplashScreen(true);
+        }
     }
 
     @Override
@@ -153,7 +199,11 @@ public class SplashScreen extends CordovaPlugin {
             return;
         }
         // hide the splash screen to avoid leaking a window
-        this.removeSplashScreen(true);
+        if (AllowVideo) {
+            this.removeVideoSplashScreen(true);
+        } else {
+            this.removeSplashScreen(true);
+        }
         // If we set this to true onDestroy, we lose track when we go from page to page!
         //firstShow = true;
     }
@@ -166,17 +216,17 @@ public class SplashScreen extends CordovaPlugin {
                     webView.postMessage("splashscreen", "hide");
                 }
             });
+            callbackContext.success();
         } else if (action.equals("show")) {
             cordova.getActivity().runOnUiThread(new Runnable() {
                 public void run() {
                     webView.postMessage("splashscreen", "show");
                 }
             });
+            callbackContext.success();
         } else {
             return false;
         }
-
-        callbackContext.success();
         return true;
     }
 
@@ -187,9 +237,21 @@ public class SplashScreen extends CordovaPlugin {
         }
         if ("splashscreen".equals(id)) {
             if ("hide".equals(data.toString())) {
-                this.removeSplashScreen(false);
+                if (AllowVideo) {
+                    if (VideoFinished) {
+                        this.removeVideoSplashScreen(false);
+                    } else {
+                        VideoHideOnFinished = true;
+                    }
+                } else {
+                    this.removeSplashScreen(false);
+                }
             } else {
-                this.showSplashScreen(false);
+                if (AllowVideo) {
+                    showVideoSplashScreen(false);
+                } else {
+                    showSplashScreen(false);
+                }
             }
         } else if ("spinner".equals(id)) {
             if ("stop".equals(data.toString())) {
@@ -219,7 +281,7 @@ public class SplashScreen extends CordovaPlugin {
     private void removeSplashScreen(final boolean forceHideImmediately) {
         cordova.getActivity().runOnUiThread(new Runnable() {
             public void run() {
-        if (splashDialog != null && splashImageView != null && splashDialog.isShowing()) {//check for non-null splashImageView, see https://issues.apache.org/jira/browse/CB-12277
+                if (splashDialog != null && splashDialog.isShowing()) {
                     final int fadeSplashScreenDuration = getFadeDuration();
                     // CB-10692 If the plugin is being paused/destroyed, skip the fading and hide it immediately
                     if (fadeSplashScreenDuration > 0 && forceHideImmediately == false) {
@@ -238,7 +300,7 @@ public class SplashScreen extends CordovaPlugin {
 
                             @Override
                             public void onAnimationEnd(Animation animation) {
-                                if (splashDialog != null && splashImageView != null && splashDialog.isShowing()) {//check for non-null splashImageView, see https://issues.apache.org/jira/browse/CB-12277
+                                if (splashDialog != null && splashDialog.isShowing()) {
                                     splashDialog.dismiss();
                                     splashDialog = null;
                                     splashImageView = null;
@@ -254,6 +316,56 @@ public class SplashScreen extends CordovaPlugin {
                         splashDialog.dismiss();
                         splashDialog = null;
                         splashImageView = null;
+                    }
+                }
+            }
+        });
+    }
+
+    private void removeVideoSplashScreen(final boolean forceHideImmediately) {
+        cordova.getActivity().runOnUiThread(new Runnable() {
+            public void run() {
+                if (splashDialog != null && splashDialog.isShowing()) {
+                    final int fadeSplashScreenDuration = getFadeDuration();
+                    // CB-10692 If the plugin is being paused/destroyed, skip the fading and hide it immediately
+                    if (fadeSplashScreenDuration > 0 && forceHideImmediately == false) {
+                        AlphaAnimation fadeOut = new AlphaAnimation(1, 0);
+                        fadeOut.setInterpolator(new DecelerateInterpolator());
+                        fadeOut.setDuration(fadeSplashScreenDuration);
+
+                        exoSurfaceView.setAnimation(fadeOut);
+                        exoSurfaceView.startAnimation(fadeOut);
+
+                        fadeOut.setAnimationListener(new Animation.AnimationListener() {
+                            @Override
+                            public void onAnimationStart(Animation animation) {
+                                spinnerStop();
+                            }
+
+                            @Override
+                            public void onAnimationEnd(Animation animation) {
+                                if (splashDialog != null && splashDialog.isShowing()) {
+                                    exoPlayer.release();
+                                    exoPlayer = null;
+                                    splashDialog.dismiss();
+                                    splashDialog = null;
+                                    splashImageView = null;
+                                    exoSurfaceView = null;
+                                }
+                            }
+
+                            @Override
+                            public void onAnimationRepeat(Animation animation) {
+                            }
+                        });
+                    } else {
+                        exoPlayer.release();
+                        exoPlayer = null;
+                        spinnerStop();
+                        splashDialog.dismiss();
+                        splashDialog = null;
+                        splashImageView = null;
+                        exoSurfaceView = null;
                     }
                 }
             }
@@ -335,6 +447,117 @@ public class SplashScreen extends CordovaPlugin {
                         public void run() {
                             if (lastHideAfterDelay) {
                                 removeSplashScreen(false);
+                            }
+                        }
+                    }, effectiveSplashDuration);
+                }
+            }
+        });
+    }
+
+    /**
+     * Shows the splash screen over the full Activity
+     */
+    @SuppressWarnings("deprecation")
+    private void showVideoSplashScreen(final boolean hideAfterDelay) {
+        final int splashscreenTime = preferences.getInteger("SplashScreenDelay", DEFAULT_SPLASHSCREEN_DURATION);
+        final int drawableId = getSplashId();
+
+        final int fadeSplashScreenDuration = getFadeDuration();
+        final int effectiveSplashDuration = Math.max(0, splashscreenTime - fadeSplashScreenDuration);
+
+        lastHideAfterDelay = hideAfterDelay;
+
+        // Prevent to show the splash dialog if the activity is in the process of finishing
+        if (cordova.getActivity().isFinishing()) {
+            return;
+        }
+        // If the splash dialog is showing don't try to show it again
+        if (splashDialog != null && splashDialog.isShowing()) {
+            return;
+        }
+        if (drawableId == 0 || (splashscreenTime <= 0 && hideAfterDelay)) {
+            return;
+        }
+
+        cordova.getActivity().runOnUiThread(new Runnable() {
+            public void run() {
+                // Get reference to display
+                Context context = webView.getContext();
+
+
+
+                Uri videoURI = Uri.parse("asset:///www/" + VideoPath);
+
+                RelativeLayout.LayoutParams layoutParams = new RelativeLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+                layoutParams.addRule(RelativeLayout.CENTER_IN_PARENT, RelativeLayout.TRUE);
+
+                exoSurfaceView = new SurfaceView(context);
+                exoSurfaceView.setLayoutParams(layoutParams);
+
+                BandwidthMeter bandwidthMeter = new DefaultBandwidthMeter();
+                TrackSelection.Factory videoTrackSelectionFactory = new AdaptiveTrackSelection.Factory(bandwidthMeter);
+                TrackSelector trackSelector = new DefaultTrackSelector(videoTrackSelectionFactory);
+
+                DefaultBandwidthMeter dBandwidthMeter = new DefaultBandwidthMeter();
+                DataSource.Factory dataSourceFactory = new DefaultDataSourceFactory(context, Util.getUserAgent(context, "fotofuze"), dBandwidthMeter);
+                MediaSource videoSource = new ExtractorMediaSource.Factory(dataSourceFactory).createMediaSource(videoURI);
+
+                exoPlayer = ExoPlayerFactory.newSimpleInstance(context, trackSelector);
+                exoPlayer.prepare(videoSource);
+                exoPlayer.setPlayWhenReady(true);
+                exoPlayer.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
+                exoPlayer.addListener(new Player.DefaultEventListener() {
+                    @Override
+                    public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
+                        if (!VideoFinished && playbackState == ExoPlayer.STATE_ENDED) {
+                            VideoFinished = true;
+                            if (VideoHideOnFinished) {
+                                removeVideoSplashScreen(false);
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onPlayerError(ExoPlaybackException error) {
+                        // Quit quietly
+                        VideoFinished = true;
+                        if (VideoHideOnFinished) {
+                            removeVideoSplashScreen(false);
+                        }
+                    }
+                });
+
+                PlayerView pv = new PlayerView(context);
+                pv.setUseController(false);
+                pv.setPlayer(exoPlayer);
+
+                exoPlayer.setVideoSurfaceView(exoSurfaceView);
+
+
+                // Create and show the dialog
+                splashDialog = new Dialog(context, android.R.style.Theme_Translucent_NoTitleBar);
+                // check to see if the splash screen should be full screen
+                if ((cordova.getActivity().getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                        == WindowManager.LayoutParams.FLAG_FULLSCREEN) {
+                    splashDialog.getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                            WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                }
+                splashDialog.setContentView(exoSurfaceView);
+                splashDialog.setCancelable(false);
+                splashDialog.show();
+
+                if (preferences.getBoolean("ShowSplashScreenSpinner", true)) {
+                    spinnerStart();
+                }
+
+                // Set Runnable to remove splash screen just in case
+                if (hideAfterDelay) {
+                    final Handler handler = new Handler();
+                    handler.postDelayed(new Runnable() {
+                        public void run() {
+                            if (lastHideAfterDelay) {
+                                removeVideoSplashScreen(false);
                             }
                         }
                     }, effectiveSplashDuration);

@@ -21,10 +21,23 @@
 #import <Cordova/CDVViewController.h>
 #import <Cordova/CDVScreenOrientationDelegate.h>
 #import "CDVViewController+SplashScreen.h"
+#import <MediaPlayer/MediaPlayer.h>
 
 #define kSplashScreenDurationDefault 3000.0f
 #define kFadeDurationDefault 500.0f
+#define kScreenWidth                    [[UIScreen mainScreen] bounds].size.width
+#define kScreenHeight                   [[UIScreen mainScreen] bounds].size.height
+#define RGBAColor(r,g,b,a)              [UIColor colorWithRed:(r)/255.0f green:(g)/255.0f blue:(b)/255.0f alpha:(a)]
+#define RGBColor(r,g,b)                 [UIColor colorWithRed:(r)/255.0f green:(g)/255.0f blue:(b)/255.0f alpha:(1)]
 
+@interface CDVSplashScreen()
+{
+    MPMoviePlayerController *videoPlayerController;
+    UIButton *skipView;
+    BOOL splashPageLoaded;
+    NSString *videoPath;
+}
+@end
 
 @implementation CDVSplashScreen
 
@@ -128,6 +141,7 @@
 {
     [_imageView setAlpha:0];
     [_activityView setAlpha:0];
+    skipView.hidden = NO;
 }
 
 - (void)destroyViews
@@ -468,7 +482,15 @@
         {
             if (_imageView == nil)
             {
+                [self createPlayerView];
+                if(!splashPageLoaded)
+                {
                 [self createViews];
+                }
+                else
+                {
+                    skipView.hidden = NO;
+                }
             }
         }
         else if (fadeDuration == 0 && splashDuration == 0)
@@ -511,4 +533,150 @@
     }
 }
 
+- (NSString *)urlDecode:(NSString *)value
+{
+    NSString *decodedString  = (__bridge_transfer NSString *)CFURLCreateStringByReplacingPercentEscapesUsingEncoding(NULL,
+                                                                                                                     (__bridge CFStringRef)value,
+                                                                                                                     CFSTR(""),
+                                                                                                                     CFStringConvertNSStringEncodingToEncoding(NSUTF8StringEncoding));
+    return decodedString;
+}
+- (BOOL)fileExist:(NSString *)path
+{
+    path = [self getFilePath:path];
+    NSFileManager *fm = [NSFileManager new];
+    return [fm fileExistsAtPath:path];
+}
+- (NSString *)getFilePath:(NSString *)path
+{
+    if([path rangeOfString:@"file:///"].location == 0)
+    {
+        path = [path substringFromIndex:@"file://".length];
+        path = [self urlDecode:path];
+    }
+    return path;
+}
+-(void)createPlayerView
+{
+    NSString *mp4Path = @"assets/welcome_movie.mp4";
+    mp4Path = [[self.commandDelegate settings] objectForKey:[@"SplashScreenVideoPath" lowercaseString]];
+    if(!mp4Path)
+    {
+        NSLog(@"video path is nil");
+        return;
+    }
+    NSLog(@"play video: %@", mp4Path);
+    NSString *showOnlyOnce = [[self.commandDelegate settings] objectForKey:[@"SplashScreenVideoShowOnlyOnce" lowercaseString]];
+    if([@"true" isEqualToString:showOnlyOnce])
+    {
+        NSString *key = @"SplashScreenVideoViewed";
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if([defaults boolForKey:key])
+        {
+            NSLog(@"splash video show only once, let's skip it");
+            return;
+        }
+        [defaults setBool:YES forKey:key];
+        [defaults synchronize];
+    }
+    NSURL* mp4URL = [NSURL URLWithString:mp4Path];
+    NSString* mp4FilePath = [self.commandDelegate pathForResource:[mp4URL path]];
+    if(!mp4FilePath && ((CDVViewController *)self.viewController).wwwFolderName.length)
+    {
+        NSString *folder = [self getFilePath:((CDVViewController *)self.viewController).wwwFolderName];
+        mp4FilePath = [NSString stringWithFormat:@"%@%@", folder, mp4Path];
+    }
+    if(!mp4FilePath || ![self fileExist:mp4FilePath])
+    {
+        mp4FilePath = [[NSBundle mainBundle] pathForResource:[NSString stringWithFormat:@"www/%@", mp4Path] ofType:nil];
+    }
+    if(!mp4FilePath || ![self fileExist:mp4FilePath])
+    {
+        NSLog(@"Video not exist: %@, %@", mp4Path, mp4FilePath);
+        return;
+    }
+    NSURL *url = [NSURL fileURLWithPath:mp4FilePath];
+    videoPlayerController = [[MPMoviePlayerController alloc] initWithContentURL:url];
+    videoPlayerController.controlStyle = MPMovieControlStyleNone;
+    [videoPlayerController.view setFrame:CGRectMake(0, 0, kScreenWidth, kScreenHeight)];
+    videoPlayerController.initialPlaybackTime = -1;
+    videoPlayerController.scalingMode = MPMovieScalingModeAspectFill;
+    [self.viewController.view addSubview:videoPlayerController.view];
+    //[self initSlipButtonView];
+    [videoPlayerController prepareToPlay];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(myMovieFinishedCallback:)
+                                                 name:MPMoviePlayerPlaybackDidFinishNotification
+                                               object:videoPlayerController];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(MPMoviePlayerPlaybackStateDidChange:)
+                                                 name:MPMoviePlayerPlaybackStateDidChangeNotification
+                                               object:nil];
+    [videoPlayerController play];
+}
+- (void)MPMoviePlayerPlaybackStateDidChange:(NSNotification *)notification
+{
+    if (videoPlayerController.playbackState == MPMoviePlaybackStatePlaying)
+    { //playing
+        NSLog(@"....1");
+        [_imageView removeFromSuperview];
+    }
+    if (videoPlayerController.playbackState == MPMoviePlaybackStateStopped)
+    { //stopped
+        NSLog(@"....2");
+    }
+    if (videoPlayerController.playbackState == MPMoviePlaybackStatePaused)
+    { //paused
+        NSLog(@"....3");
+    }
+    if (videoPlayerController.playbackState == MPMoviePlaybackStateInterrupted)
+    { //interrupted
+        NSLog(@"....4");
+    }
+    if (videoPlayerController.playbackState == MPMoviePlaybackStateSeekingForward)
+    { //seeking forward
+        NSLog(@"....5");
+    }
+    if (videoPlayerController.playbackState == MPMoviePlaybackStateSeekingBackward)
+    { //seeking backward
+        NSLog(@"....6");
+    }
+}
+- (void)initSlipButtonView
+{
+    CGFloat vmaring = 15;
+    CGFloat hmaring = 30;
+    CGFloat slitpW = 50;
+    CGFloat slitpH = 30;
+    skipView = [UIButton buttonWithType:UIButtonTypeCustom];
+    skipView.clipsToBounds = YES;
+    skipView.layer.cornerRadius = 5;
+    skipView.frame = CGRectMake(kScreenWidth - vmaring - slitpW, hmaring, slitpW, slitpH);
+    [skipView setBackgroundColor:RGBAColor(0x0, 0x0, 0x0, .3)];
+    [skipView setTintColor:RGBColor(0xff, 0xff, 0xff)];
+    [skipView setTitle:@"跳过" forState:UIControlStateNormal];
+    skipView.titleLabel.font = [UIFont systemFontOfSize:14];
+    [skipView addTarget:self action:@selector(skipVideo) forControlEvents:UIControlEventTouchUpInside];
+    skipView.hidden = YES;
+    [self.viewController.view addSubview:skipView];
+}
+- (void)myMovieFinishedCallback:(NSNotification*)notify
+{
+    [self disposeVideo];
+}
+- (void)skipVideo
+{
+    [videoPlayerController stop];
+    [self disposeVideo];
+}
+- (void)disposeVideo
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:MPMoviePlayerPlaybackDidFinishNotification object:videoPlayerController];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:MPMoviePlayerPlaybackStateDidChangeNotification object:videoPlayerController];
+    [videoPlayerController.view removeFromSuperview];
+    [skipView removeFromSuperview];
+    splashPageLoaded = YES;
+    videoPath = nil;
+    _visible = NO;
+}
 @end
