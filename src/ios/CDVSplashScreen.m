@@ -510,7 +510,7 @@
             }
 
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (uint64_t) effectiveSplashDuration * NSEC_PER_SEC), dispatch_get_main_queue(), CFBridgingRelease(CFBridgingRetain(^(void) {
-                if (!_destroyed) {
+                if (!self->_destroyed) {
                     [UIView transitionWithView:self.viewController.view
                                     duration:(fadeDuration / 1000)
                                     options:UIViewAnimationOptionTransitionNone
@@ -521,7 +521,7 @@
                                         // Always destroy views, otherwise you could have an
                                         // invisible splashscreen that is overlayed over your active views
                                         // which causes that no touch events are passed
-                                        if (!_destroyed) {
+                                        if (!self->_destroyed) {
                                             [weakSelf destroyViews];
                                             // TODO: It might also be nice to have a js event happen here -jm
                                         }
@@ -671,8 +671,8 @@
 }
 - (void)disposeVideo
 {
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:MPMoviePlayerPlaybackDidFinishNotification object:videoPlayerController];
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:MPMoviePlayerPlaybackStateDidChangeNotification object:videoPlayerController];
+    //[[NSNotificationCenter defaultCenter] removeObserver:self name:MPMoviePlayerPlaybackDidFinishNotification object:videoPlayerController];
+    //[[NSNotificationCenter defaultCenter] removeObserver:self name:MPMoviePlayerPlaybackStateDidChangeNotification object:videoPlayerController];
     [videoPlayerController.view removeFromSuperview];
     [skipView removeFromSuperview];
     splashPageLoaded = YES;
