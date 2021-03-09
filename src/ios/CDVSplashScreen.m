@@ -21,7 +21,8 @@
 #import <Cordova/CDVViewController.h>
 #import <Cordova/CDVScreenOrientationDelegate.h>
 #import "CDVViewController+SplashScreen.h"
-#import <MediaPlayer/MediaPlayer.h>
+@import AVFoundation;
+@import AVKit;
 
 #define kSplashScreenDurationDefault 3000.0f
 #define kFadeDurationDefault 500.0f
@@ -32,7 +33,8 @@
 
 @interface CDVSplashScreen()
 {
-    MPMoviePlayerController *videoPlayerController;
+    AVPlayerViewController *videoPlayerController;
+    AVPlayer *player;
     UIButton *skipView;
     BOOL splashPageLoaded;
     NSString *videoPath;
@@ -596,77 +598,30 @@
         return;
     }
     NSURL *url = [NSURL fileURLWithPath:mp4FilePath];
-    videoPlayerController = [[MPMoviePlayerController alloc] initWithContentURL:url];
-    videoPlayerController.controlStyle = MPMovieControlStyleNone;
-    [videoPlayerController.view setFrame:CGRectMake(0, 0, kScreenWidth, kScreenHeight)];
-    videoPlayerController.initialPlaybackTime = -1;
-    videoPlayerController.scalingMode = MPMovieScalingModeAspectFill;
-    [self.viewController.view addSubview:videoPlayerController.view];
+    AVPlayerItem* playerItem = [AVPlayerItem playerItemWithURL:url];
     //[self initSlipButtonView];
-    [videoPlayerController prepareToPlay];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(myMovieFinishedCallback:)
-                                                 name:MPMoviePlayerPlaybackDidFinishNotification
-                                               object:videoPlayerController];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(MPMoviePlayerPlaybackStateDidChange:)
-                                                 name:MPMoviePlayerPlaybackStateDidChangeNotification
-                                               object:nil];
-    [videoPlayerController play];
-}
-- (void)MPMoviePlayerPlaybackStateDidChange:(NSNotification *)notification
-{
-    if (videoPlayerController.playbackState == MPMoviePlaybackStatePlaying)
-    { //playing
-        NSLog(@"....1");
+                                                     name:AVPlayerItemDidPlayToEndTimeNotification
+                                                   object:playerItem];
+    videoPlayerController = [[AVPlayerViewController alloc] init];
+    player = [[AVPlayer alloc] initWithPlayerItem:playerItem];
+    videoPlayerController.player = player;
+    videoPlayerController.showsPlaybackControls = false;
+    [videoPlayerController.view setFrame:CGRectMake(0, 0, kScreenWidth, kScreenHeight)];
+    videoPlayerController.view.frame = self.webView.bounds;
+    videoPlayerController.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    
+    [self.viewController.view addSubview:videoPlayerController.view];
         [_imageView removeFromSuperview];
-    }
-    if (videoPlayerController.playbackState == MPMoviePlaybackStateStopped)
-    { //stopped
-        NSLog(@"....2");
-    }
-    if (videoPlayerController.playbackState == MPMoviePlaybackStatePaused)
-    { //paused
-        NSLog(@"....3");
-    }
-    if (videoPlayerController.playbackState == MPMoviePlaybackStateInterrupted)
-    { //interrupted
-        NSLog(@"....4");
-    }
-    if (videoPlayerController.playbackState == MPMoviePlaybackStateSeekingForward)
-    { //seeking forward
-        NSLog(@"....5");
-    }
-    if (videoPlayerController.playbackState == MPMoviePlaybackStateSeekingBackward)
-    { //seeking backward
-        NSLog(@"....6");
-    }
+    [player play];
 }
-- (void)initSlipButtonView
-{
-    CGFloat vmaring = 15;
-    CGFloat hmaring = 30;
-    CGFloat slitpW = 50;
-    CGFloat slitpH = 30;
-    skipView = [UIButton buttonWithType:UIButtonTypeCustom];
-    skipView.clipsToBounds = YES;
-    skipView.layer.cornerRadius = 5;
-    skipView.frame = CGRectMake(kScreenWidth - vmaring - slitpW, hmaring, slitpW, slitpH);
-    [skipView setBackgroundColor:RGBAColor(0x0, 0x0, 0x0, .3)];
-    [skipView setTintColor:RGBColor(0xff, 0xff, 0xff)];
-    [skipView setTitle:@"跳过" forState:UIControlStateNormal];
-    skipView.titleLabel.font = [UIFont systemFontOfSize:14];
-    [skipView addTarget:self action:@selector(skipVideo) forControlEvents:UIControlEventTouchUpInside];
-    skipView.hidden = YES;
-    [self.viewController.view addSubview:skipView];
-}
-- (void)myMovieFinishedCallback:(NSNotification*)notify
-{
+- (void)myMovieFinishedCallback:(NSNotification*)notify{
     [self disposeVideo];
 }
 - (void)skipVideo
 {
-    [videoPlayerController stop];
+    [player pause];
     [self disposeVideo];
 }
 - (void)disposeVideo
